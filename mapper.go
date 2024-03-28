@@ -67,8 +67,8 @@ func defaultMapper(src *Src, dest *Dest, opts *Options) error {
 	if err := src.Rows.Scan(destSlice...); err != nil {
 		return err
 	}
-	coerceDest := func(scannedVal reflect.Value, toType reflect.Type) (reflect.Value, error) {
-		return opts.Dialect.CoerceDest(scannedVal, toType, opts)
+	coerceDest := func(ci *sql.ColumnType, scannedVal reflect.Value, toType reflect.Type) (reflect.Value, error) {
+		return opts.Dialect.CoerceDest(ci, scannedVal, toType, opts)
 	}
 	switch dest.Kind {
 	case StructPtr:
@@ -76,8 +76,8 @@ func defaultMapper(src *Src, dest *Dest, opts *Options) error {
 	case Map:
 		dv := reflect.ValueOf(dest.Target)
 		for i := range src.Columns {
-			cn, dv1 := src.Columns[i], reflect.ValueOf(destSlice[i]).Elem()
-			targetVal, err := coerceDest(dv1, dest.Type.Elem())
+			ci, cn, dv1 := src.ColumnTypes[i], src.Columns[i], reflect.ValueOf(destSlice[i]).Elem()
+			targetVal, err := coerceDest(ci, dv1, dest.Type.Elem())
 			if err != nil {
 				return ErrCoerceDest
 			}
@@ -87,7 +87,8 @@ func defaultMapper(src *Src, dest *Dest, opts *Options) error {
 	case PrimitivePtr:
 		dv := reflect.ValueOf(dest.Target)
 		dv0 := reflect.ValueOf(destSlice[0]).Elem()
-		targetVal, err := coerceDest(dv0, dest.Type.Elem())
+		ci0 := src.ColumnTypes[0]
+		targetVal, err := coerceDest(ci0, dv0, dest.Type.Elem())
 		if err != nil {
 			return ErrCoerceDest
 		}
@@ -97,8 +98,9 @@ func defaultMapper(src *Src, dest *Dest, opts *Options) error {
 		dv := reflect.ValueOf(dest.Target)
 		rv := reflect.MakeSlice(dest.Type, 0, len(destSlice))
 		for i := range src.Columns {
+			ci1 := src.ColumnTypes[i]
 			dv1 := reflect.ValueOf(destSlice[i]).Elem()
-			targetVal, err := coerceDest(dv1, dest.Type.Elem())
+			targetVal, err := coerceDest(ci1, dv1, dest.Type.Elem())
 			if err != nil {
 				return ErrCoerceDest
 			}

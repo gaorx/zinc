@@ -14,7 +14,7 @@ type Dialect interface {
 	Quote(s string, opts *Options) string
 	CompileNamedQuery(q string, opts *Options) (string, []string, error)
 	NewDest(ci *sql.ColumnType, opts *Options) any
-	CoerceDest(scannedVal reflect.Value, toType reflect.Type, opts *Options) (reflect.Value, error)
+	CoerceDest(ci *sql.ColumnType, scannedVal reflect.Value, toType reflect.Type, opts *Options) (reflect.Value, error)
 }
 
 func dialectOf(driverName string) Dialect {
@@ -148,21 +148,29 @@ func compileNamedQuery(qs []byte, bindType int) (query string, names []string, e
 }
 
 // coerce dest
-func coerceDest(scannedVal reflect.Value, toType reflect.Type, _ *Options) (reflect.Value, error) {
+func coerceDest(_ *sql.ColumnType, scannedVal reflect.Value, toType reflect.Type, opts *Options) (reflect.Value, error) {
 	if scannedVal.Type() == toType {
 		return scannedVal, nil
 	}
-	if toType == typAny {
-		return scannedVal, nil
-	}
+
 	// TODO: more coerce
 	switch toType {
+	case typAny:
+		return scannedVal, nil
 	case typString:
-		switch s := scannedVal.Interface().(type) {
+		switch a := scannedVal.Interface().(type) {
 		case []byte:
-			return reflect.ValueOf(string(s)), nil
+			s, ok := b2s(a, opts.TextCharset)
+			if !ok {
+				return reflect.Value{}, errors.New("failed to convert []byte to string")
+			}
+			return reflect.ValueOf(s), nil
 		case sql.RawBytes:
-			return reflect.ValueOf(string(s)), nil
+			s, ok := b2s(a, opts.TextCharset)
+			if !ok {
+				return reflect.Value{}, errors.New("failed to convert sql.RawBytes to string")
+			}
+			return reflect.ValueOf(s), nil
 		default:
 			panic("xxx")
 		}

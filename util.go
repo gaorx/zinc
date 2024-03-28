@@ -2,6 +2,8 @@ package zinc
 
 import (
 	"reflect"
+	"strings"
+	"sync"
 )
 
 func fromPtr[T any](p *T) T {
@@ -15,9 +17,25 @@ func fromPtr[T any](p *T) T {
 
 func deref(t reflect.Type) reflect.Type {
 	if t.Kind() == reflect.Ptr {
-		t = t.Elem()
+		return t.Elem()
 	}
 	return t
+}
+
+func derefDeep(t reflect.Type) reflect.Type {
+	for t.Kind() == reflect.Ptr {
+		return derefDeep(t.Elem())
+	}
+	return t
+}
+
+func cloneSlice[T any](slice []T) []T {
+	if slice == nil {
+		return nil
+	}
+	r := make([]T, len(slice))
+	copy(r, slice)
+	return r
 }
 
 func isAny(t reflect.Type) bool {
@@ -119,4 +137,44 @@ func isStructPtrPtr(t reflect.Type) (reflect.Type, bool) {
 		return nil, false
 	}
 	return isStructPtr(t.Elem())
+}
+
+func sliceContains[T comparable](slice []T, target T) bool {
+	for _, v := range slice {
+		if v == target {
+			return true
+		}
+	}
+	return false
+}
+
+func b2s(b []byte, charset string) (string, bool) {
+	// TODO: charset
+	return string(b), true
+}
+
+func lockR(m *sync.RWMutex, f func()) {
+	m.RLock()
+	defer m.RUnlock()
+	f()
+}
+
+func lockW(m *sync.RWMutex, f func()) {
+	m.Lock()
+	defer m.Unlock()
+	f()
+}
+
+func splitNonEmpty(s string, sep string) []string {
+	if s == "" {
+		return nil
+	}
+	var r []string
+	for _, e := range strings.Split(s, sep) {
+		e = strings.TrimSpace(e)
+		if e != "" {
+			r = append(r, e)
+		}
+	}
+	return r
 }

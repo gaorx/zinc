@@ -12,7 +12,7 @@ func (db *DB) RawExec(dest any, q string, args ...any) error {
 	if err != nil {
 		return fmt.Errorf("%w: %s", ErrBind, err.Error())
 	}
-	opts := modifyOptions(db.options, optsModifier)
+	opts := copyOptions(db.options, optsModifier)
 	var sqlRes sql.Result
 	switch db.kind {
 	case kindDB:
@@ -87,7 +87,7 @@ func (db *DB) RawQueryOne(dest any, q string, args ...any) error {
 	if err != nil {
 		return fmt.Errorf("%w: %s", ErrBind, err.Error())
 	}
-	opts := modifyOptions(db.options, optsModifier)
+	opts := copyOptions(db.options, optsModifier)
 	var rows *sql.Rows
 	switch db.kind {
 	case kindDB:
@@ -156,8 +156,9 @@ func (db *DB) RawQueryOne(dest any, q string, args ...any) error {
 		if err := src.fetchColumns(false); err != nil {
 			return err
 		}
+		mapRow := makeMapRowFunc(reflect.TypeOf(dest), mapper, opts)
 		if rows.Next() {
-			if err := mapRow(&src, dest, mapper, opts); err != nil {
+			if err := mapRow(&src, dest); err != nil {
 				return err
 			}
 			if err := rows.Err(); err != nil {
@@ -176,7 +177,7 @@ func (db *DB) RawQueryAll(dest any, q string, args ...any) error {
 	if err != nil {
 		return fmt.Errorf("%w: %s", ErrBind, err.Error())
 	}
-	opts := modifyOptions(db.options, optsModifier)
+	opts := copyOptions(db.options, optsModifier)
 	var rows *sql.Rows
 	switch db.kind {
 	case kindDB:
@@ -238,24 +239,26 @@ func (db *DB) RawQueryAll(dest any, q string, args ...any) error {
 		return nil
 	} else {
 		dv := reflect.ValueOf(dest)
+		if dv.IsNil() {
+			return nil
+		}
 		sliceTyp, ok := isSlicePtr(dv.Type())
 		if !ok {
 			return ErrInvalidDest
 		}
 		et := sliceTyp.Elem()
-		if dv.IsNil() {
-			return nil
-		}
+
 		// use mapper to map
 		mapper := getMapper(dest, opts)
 		src := Src{Rows: rows}
 		if err := src.fetchColumns(false); err != nil {
 			return err
 		}
+		mapRow := makeMapRowFunc(et, mapper, opts)
 		if ok := isStruct(et); ok {
 			elemDest := reflect.New(et).Interface()
 			for rows.Next() {
-				if err := mapRow(&src, elemDest, mapper, opts); err != nil {
+				if err := mapRow(&src, elemDest); err != nil {
 					return err
 				}
 				dv.Elem().Set(reflect.Append(dv.Elem(), reflect.ValueOf(elemDest).Elem()))
@@ -264,7 +267,7 @@ func (db *DB) RawQueryAll(dest any, q string, args ...any) error {
 		} else if et1, ok := isStructPtr(et); ok {
 			for rows.Next() {
 				elemDest := reflect.New(et1).Interface()
-				if err := mapRow(&src, elemDest, mapper, opts); err != nil {
+				if err := mapRow(&src, elemDest); err != nil {
 					return err
 				}
 				dv.Elem().Set(reflect.Append(dv.Elem(), reflect.ValueOf(elemDest)))
@@ -273,7 +276,7 @@ func (db *DB) RawQueryAll(dest any, q string, args ...any) error {
 		} else if ok := isRowMap(et); ok {
 			for rows.Next() {
 				elemDest := reflect.MakeMap(et).Interface()
-				if err := mapRow(&src, elemDest, mapper, opts); err != nil {
+				if err := mapRow(&src, elemDest); err != nil {
 					return err
 				}
 				dv.Elem().Set(reflect.Append(dv.Elem(), reflect.ValueOf(elemDest)))
@@ -282,7 +285,7 @@ func (db *DB) RawQueryAll(dest any, q string, args ...any) error {
 		} else if ok := isPrimitive(et); ok {
 			for rows.Next() {
 				elemDest := reflect.New(et).Interface()
-				if err := mapRow(&src, elemDest, mapper, opts); err != nil {
+				if err := mapRow(&src, elemDest); err != nil {
 					return err
 				}
 				dv.Elem().Set(reflect.Append(dv.Elem(), reflect.ValueOf(elemDest).Elem()))
@@ -291,7 +294,7 @@ func (db *DB) RawQueryAll(dest any, q string, args ...any) error {
 		} else if ok := isAny(et); ok {
 			for rows.Next() {
 				elemDest := map[string]any{}
-				if err := mapRow(&src, elemDest, mapper, opts); err != nil {
+				if err := mapRow(&src, elemDest); err != nil {
 					return err
 				}
 				dv.Elem().Set(reflect.Append(dv.Elem(), reflect.ValueOf(elemDest)))
@@ -323,70 +326,82 @@ func getMapper(dest any, opts *Options) Mapper {
 	return mapper
 }
 
-func mapRow(src *Src, dest any, mapper Mapper, opts *Options) error {
-	if err := src.fetchColumns(false); err != nil {
-		return err
-	}
-	dt := reflect.TypeOf(dest)
+func makeMapRowFunc(dt reflect.Type, mapper Mapper, opts *Options) func(src *Src, dest any) error {
 	if et, ok := isStructPtr(dt); ok {
-		dv := reflect.ValueOf(dest)
-		if dv.IsNil() {
-			return nil
-		}
-		d := Dest{Target: dest, Kind: StructPtr, Type: et}
-		return mapper(src, &d, opts)
-	} else if et, ok := isStructPtrPtr(dt); ok {
-		dv := reflect.ValueOf(dest)
-		if dv.IsNil() {
-			return nil
-		} else {
-			if dv.Elem().IsNil() {
-				dv.Elem().Set(reflect.New(et))
+		return func(src *Src, dest any) error {
+			dv := reflect.ValueOf(dest)
+			if dv.IsNil() {
+				return nil
 			}
+			d := Dest{Target: dest, Kind: StructPtr, Type: et}
+			return mapper(src, &d, opts)
 		}
-		d := Dest{Target: dv.Elem().Interface(), Kind: StructPtr, Type: et}
-		return mapper(src, &d, opts)
+	} else if et, ok := isStructPtrPtr(dt); ok {
+		return func(src *Src, dest any) error {
+			dv := reflect.ValueOf(dest)
+			if dv.IsNil() {
+				return nil
+			} else {
+				if dv.Elem().IsNil() {
+					dv.Elem().Set(reflect.New(et))
+				}
+			}
+			d := Dest{Target: dv.Elem().Interface(), Kind: StructPtr, Type: et}
+			return mapper(src, &d, opts)
+		}
 	} else if ok := isRowMap(dt); ok {
-		dv := reflect.ValueOf(dest)
-		if dv.IsNil() {
-			return nil
+		return func(src *Src, dest any) error {
+			dv := reflect.ValueOf(dest)
+			if dv.IsNil() {
+				return nil
+			}
+			d := Dest{Target: dest, Kind: Map, Type: dt}
+			return mapper(src, &d, opts)
 		}
-		d := Dest{Target: dest, Kind: Map, Type: dt}
-		return mapper(src, &d, opts)
 	} else if et, ok := isRowMapPtr(dt); ok {
-		dv := reflect.ValueOf(dest)
-		if dv.IsNil() {
-			return nil
+		return func(src *Src, dest any) error {
+			dv := reflect.ValueOf(dest)
+			if dv.IsNil() {
+				return nil
+			}
+			if dv.Elem().IsNil() {
+				dv.Elem().Set(reflect.MakeMap(et))
+			}
+			d := Dest{Target: dv.Elem().Interface(), Kind: Map, Type: et}
+			return mapper(src, &d, opts)
 		}
-		if dv.Elem().IsNil() {
-			dv.Elem().Set(reflect.MakeMap(et))
-		}
-		d := Dest{Target: dv.Elem().Interface(), Kind: Map, Type: et}
-		return mapper(src, &d, opts)
 	} else if et, ok := isPrimitivePtr(dt); ok {
-		dv := reflect.ValueOf(dest)
-		if dv.IsNil() {
-			return nil
+		return func(src *Src, dest any) error {
+			dv := reflect.ValueOf(dest)
+			if dv.IsNil() {
+				return nil
+			}
+			d := Dest{Target: dest, Kind: PrimitivePtr, Type: et}
+			return mapper(src, &d, opts)
 		}
-		d := Dest{Target: dest, Kind: PrimitivePtr, Type: et}
-		return mapper(src, &d, opts)
 	} else if et, ok := isSlicePtr(dt); ok {
-		dv := reflect.ValueOf(dest)
-		if dv.IsNil() {
-			return nil
+		return func(src *Src, dest any) error {
+			dv := reflect.ValueOf(dest)
+			if dv.IsNil() {
+				return nil
+			}
+			d := Dest{Target: dest, Kind: SlicePtr, Type: et}
+			return mapper(src, &d, opts)
 		}
-		d := Dest{Target: dest, Kind: SlicePtr, Type: et}
-		return mapper(src, &d, opts)
 	} else if ok := isAnyPtr(dt); ok {
-		dv := reflect.ValueOf(dest)
-		if dv.IsNil() {
-			return nil
-		} else {
-			dv.Elem().Set(reflect.ValueOf(map[string]any{}))
+		return func(src *Src, dest any) error {
+			dv := reflect.ValueOf(dest)
+			if dv.IsNil() {
+				return nil
+			} else {
+				dv.Elem().Set(reflect.ValueOf(map[string]any{}))
+			}
+			d := Dest{Target: dv.Elem(), Kind: Map, Type: dv.Elem().Type()}
+			return mapper(src, &d, opts)
 		}
-		d := Dest{Target: dv.Elem(), Kind: Map, Type: dv.Elem().Type()}
-		return mapper(src, &d, opts)
 	} else {
-		return ErrInvalidDest
+		return func(src *Src, dest any) error {
+			return ErrInvalidDest
+		}
 	}
 }

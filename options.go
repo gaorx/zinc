@@ -2,10 +2,10 @@ package zinc
 
 type Options struct {
 	// dialect
-	Dialect Dialect
-
-	// mapper
-	Mapper Mapper
+	Dialect      Dialect
+	Mapper       Mapper
+	NameResolver NameResolver
+	TextCharset  string
 
 	// log
 	Logger           Logger
@@ -17,7 +17,7 @@ type Options struct {
 
 type OptionsModifier func(*Options)
 
-func modifyOptions(opts *Options, modifier OptionsModifier) *Options {
+func copyOptions(opts *Options, modifier OptionsModifier) *Options {
 	opts1 := fromPtr(opts)
 	if modifier != nil {
 		modifier(&opts1)

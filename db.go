@@ -29,6 +29,9 @@ func New(driverName string, db *sql.DB, opts *Options) (*DB, error) {
 		}
 		opts1.Dialect = dialect
 	}
+	if opts1.NameResolver == nil {
+		opts1.NameResolver = DefaultNameResolver
+	}
 	return &DB{
 		kind:    kindDB,
 		db:      db,
